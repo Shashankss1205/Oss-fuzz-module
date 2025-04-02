@@ -15,6 +15,7 @@ import re
 
 from ..utils.client import client
 from ..utils.common import validate_project_name
+from ..models import OSSFuzzProject, FuzzTarget, FuzzingExecution
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ def setup_local_fuzzing(project_name: str,
                        fuzz_target: Optional[str] = None,
                        output_dir: Optional[str] = None,
                        architecture: str = "x86_64",
-                       sanitizer: str = "address") -> Dict[str, Any]:
+                       sanitizer: str = "address") -> FuzzingExecution:
     """
     Set up the environment for local fuzzing of an OSS-Fuzz project.
     
@@ -34,86 +35,44 @@ def setup_local_fuzzing(project_name: str,
         sanitizer (str, optional): Sanitizer to use (default: address)
         
     Returns:
-        Dict: Setup results including paths to built binaries
+        FuzzingExecution: The fuzzing execution session
         
     Raises:
         ValueError: If parameters are invalid
         RuntimeError: If setup fails
         
     Example:
-        >>> setup_local_fuzzing("curl", fuzz_target="curl_fuzzer")
-        {
-            'project': 'curl',
-            'fuzz_target': 'curl_fuzzer',
-            'fuzz_target_path': '/path/to/curl_fuzzer',
-            'setup_dir': '/path/to/setup',
-            'success': True
-        }
+        >>> execution = setup_local_fuzzing("curl", fuzz_target="curl_fuzzer")
+        >>> print(f"Setup completed: {execution.status}")
+        Setup completed: running
     """
     project_name = validate_project_name(project_name)
     
-    # Create a temporary directory if none provided
-    if not output_dir:
-        output_dir = os.path.join(os.getcwd(), f"{project_name}_fuzzing")
+    # Get project details
+    project = client.get_project_details_from_repo(project_name)
     
-    # Create the output directory
-    os.makedirs(output_dir, exist_ok=True)
+    # Get available fuzz targets
+    targets = client.get_fuzz_targets(project)
     
-    result = {
-        'project': project_name,
-        'setup_dir': output_dir,
-        'architecture': architecture,
-        'sanitizer': sanitizer,
-        'success': False
-    }
+    # Find the specified target or use the first available one
+    target = None
+    if fuzz_target:
+        target = next((t for t in targets if t.name == fuzz_target), None)
+    if not target and targets:
+        target = targets[0]
+        logger.info(f"Using fuzz target: {target.name}")
     
-    try:
-        # Check if we have the OSS-Fuzz repository
-        oss_fuzz_dir = client.get_oss_fuzz_dir()
-        
-        if not oss_fuzz_dir:
-            # Clone OSS-Fuzz if it doesn't exist
-            oss_fuzz_dir = client.clone_oss_fuzz()
-            
-        if not oss_fuzz_dir:
-            raise RuntimeError("Failed to setup OSS-Fuzz repository")
-            
-        result['oss_fuzz_dir'] = oss_fuzz_dir
-        
-        # Check if the project exists in OSS-Fuzz
-        project_dir = os.path.join(oss_fuzz_dir, "projects", project_name)
-        if not os.path.exists(project_dir):
-            raise ValueError(f"Project {project_name} not found in OSS-Fuzz repository")
-            
-        # Get available fuzz targets if none specified
-        available_targets = []
-        if not fuzz_target:
-            available_targets = _get_fuzz_targets(project_name, project_dir)
-            if available_targets:
-                fuzz_target = available_targets[0]
-                logger.info(f"Using fuzz target: {fuzz_target}")
-            else:
-                raise ValueError(f"No fuzz targets found for project {project_name}")
-        
-        result['fuzz_target'] = fuzz_target
-        result['available_targets'] = available_targets
-        
-        # For demonstration, since we can't actually build locally without proper setup
-        fuzz_target_path = os.path.join(output_dir, fuzz_target)
-        with open(fuzz_target_path, 'w') as f:
-            f.write("#!/bin/bash\necho 'This is a placeholder for the actual fuzz target binary'")
-        os.chmod(fuzz_target_path, 0o755)
-        
-        result['fuzz_target_path'] = fuzz_target_path
-        result['success'] = True
-        result['warning'] = "This is a placeholder setup. Actual setup requires OSS-Fuzz infrastructure."
-        
-    except Exception as e:
-        result['error'] = str(e)
-        logger.error(f"Failed to setup local fuzzing: {e}")
+    if not target:
+        raise ValueError(f"No fuzz targets found for project {project_name}")
     
-    return result
-
+    # Set up the fuzzing environment
+    return client.setup_fuzzing(
+        project=project,
+        target=target,
+        output_dir=Path(output_dir) if output_dir else None,
+        architecture=architecture,
+        sanitizer=sanitizer
+    )
 
 def run_local_fuzzing(project_name: str,
                      fuzz_target: str,
@@ -121,13 +80,13 @@ def run_local_fuzzing(project_name: str,
                      duration: int = 60,
                      max_memory: Optional[int] = None,
                      env_vars: Optional[Dict[str, str]] = None,
-                     output_dir: Optional[str] = None) -> Dict[str, Any]:
+                     output_dir: Optional[str] = None) -> FuzzingExecution:
     """
     Run a local fuzzing session for an OSS-Fuzz project.
     
     Args:
         project_name (str): Name of the OSS-Fuzz project
-        fuzz_target (str): Path to the fuzz target binary
+        fuzz_target (str): Name of the fuzz target to run
         corpus_dir (str, optional): Path to the corpus directory
         duration (int, optional): Duration in seconds (default: 60)
         max_memory (int, optional): Maximum memory in MB
@@ -135,80 +94,64 @@ def run_local_fuzzing(project_name: str,
         output_dir (str, optional): Directory to save fuzzing results
         
     Returns:
-        Dict: Fuzzing results
+        FuzzingExecution: The fuzzing execution session
         
     Raises:
         ValueError: If parameters are invalid
         RuntimeError: If fuzzing fails
         
     Example:
-        >>> run_local_fuzzing("curl", "/path/to/curl_fuzzer", 
-        ...                  corpus_dir="/path/to/corpus", 
-        ...                  duration=300)
-        {
-            'project': 'curl',
-            'fuzz_target': 'curl_fuzzer',
-            'duration': 300,
-            'executions': 1000000,
-            'crashes': 0,
-            'unique_crashes': 0,
-            'run_time': 300.5,
-            'output_dir': '/path/to/output'
-        }
+        >>> execution = run_local_fuzzing("curl", "curl_fuzzer", 
+        ...                              corpus_dir="/path/to/corpus", 
+        ...                              duration=300)
+        >>> print(f"Executions: {execution.executions}, Crashes: {execution.crashes}")
+        Executions: 1000000, Crashes: 0
     """
     project_name = validate_project_name(project_name)
     
-    if not fuzz_target or not os.path.exists(fuzz_target):
-        raise ValueError(f"Fuzz target binary not found: {fuzz_target}")
+    # Set up the fuzzing environment
+    execution = setup_local_fuzzing(
+        project_name=project_name,
+        fuzz_target=fuzz_target,
+        output_dir=output_dir
+    )
     
-    # Create a temporary directory if none provided
-    if not output_dir:
-        output_dir = os.path.join(os.getcwd(), f"{project_name}_fuzzing_output")
-    
-    # Create the output directory
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Create a corpus directory if none provided
-    if not corpus_dir:
-        corpus_dir = os.path.join(os.getcwd(), f"{project_name}_corpus")
-        os.makedirs(corpus_dir, exist_ok=True)
-    
-    result = {
-        'project': project_name,
-        'fuzz_target': os.path.basename(fuzz_target),
-        'fuzz_target_path': fuzz_target,
-        'corpus_dir': corpus_dir,
-        'duration': duration,
-        'output_dir': output_dir,
-        'success': False
-    }
+    # Update execution parameters
+    if corpus_dir:
+        execution.corpus_dir = Path(corpus_dir)
+    if max_memory:
+        execution.max_memory = max_memory
+    if env_vars:
+        execution.environment_vars.update(env_vars)
     
     try:
         # For demonstration purposes, since we can't actually run fuzzing
-        result['warning'] = "This is a simulated fuzzing run. Actual fuzzing requires proper setup."
-        result['executions'] = int(duration * 1000)  # Simulate executions
-        result['crashes'] = 0
-        result['unique_crashes'] = 0
-        result['run_time'] = float(duration)
-        result['success'] = True
+        execution.warning = "This is a simulated fuzzing run. Actual fuzzing requires proper setup."
+        execution.executions = int(duration * 1000)  # Simulate executions
+        execution.crashes = 0
+        execution.unique_crashes = 0
+        execution.run_time = float(duration)
+        execution.status = "completed"
         
         # Create some sample output files
-        with open(os.path.join(output_dir, "fuzzing_stats.json"), 'w') as f:
-            json.dump({
-                'start_time': datetime.datetime.now().isoformat(),
-                'end_time': (datetime.datetime.now() + datetime.timedelta(seconds=duration)).isoformat(),
-                'executions': result['executions'],
-                'crashes': result['crashes'],
-                'unique_crashes': result['unique_crashes'],
-                'peak_rss': 100 * 1024 * 1024,  # 100 MB
-                'average_exec_per_sec': result['executions'] / duration
-            }, f, indent=2)
-            
+        if execution.output_dir:
+            with open(execution.output_dir / "fuzzing_stats.json", 'w') as f:
+                json.dump({
+                    'start_time': execution.start_time.isoformat(),
+                    'end_time': execution.end_time.isoformat(),
+                    'executions': execution.executions,
+                    'crashes': execution.crashes,
+                    'unique_crashes': execution.unique_crashes,
+                    'peak_rss': 100 * 1024 * 1024,  # 100 MB
+                    'average_exec_per_sec': execution.executions / duration
+                }, f, indent=2)
+                
     except Exception as e:
-        result['error'] = str(e)
+        execution.status = "failed"
+        execution.error = str(e)
         logger.error(f"Failed to run local fuzzing: {e}")
     
-    return result
+    return execution
 
 
 def analyze_fuzzing_results(results_dir: str) -> Dict[str, Any]:

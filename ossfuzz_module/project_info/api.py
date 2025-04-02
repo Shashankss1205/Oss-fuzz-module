@@ -5,9 +5,11 @@ Project information APIs for OSS-Fuzz projects.
 from typing import Dict, List, Optional, Any, Union
 import os
 import logging
+from datetime import datetime
 
 from ..utils.client import client
 from ..utils.common import validate_project_name
+from ..models import OSSFuzzProject, FuzzTarget
 
 logger = logging.getLogger(__name__)
 
@@ -22,46 +24,33 @@ def list_projects() -> List[str]:
         >>> list_projects()
         ['curl', 'ffmpeg', 'openssl', ...]
     """
-    return client.get_projects()
+    projects = client.get_projects_from_repo()
+    return [p.name for p in projects]
 
 
-def get_project_details(project_name: str) -> Dict[str, Any]:
+def get_project_details(project_name: str) -> OSSFuzzProject:
     """
-    Get detailed information about a specific OSS-Fuzz project.
+    Get detailed information about a specific project.
     
     Args:
         project_name (str): Name of the OSS-Fuzz project
         
     Returns:
-        Dict: Project details including maintainers, language, etc.
+        OSSFuzzProject: Project details
         
     Raises:
         ValueError: If project name is invalid
         
     Example:
-        >>> get_project_details("curl")
-        {
-            'name': 'curl',
-            'url': 'https://github.com/curl/curl',
-            'maintainers': ['user@example.com'],
-            'language': 'c/c++',
-            'sanitizers': ['address', 'undefined', 'memory'],
-            ...
-        }
+        >>> project = get_project_details("curl")
+        >>> print(f"Project: {project.name}, Language: {project.language}")
+        Project: curl, Language: c++
     """
     project_name = validate_project_name(project_name)
-    
-    # Get project details from the client
-    project_details = client.get_project_details(project_name)
-    
-    if "error" in project_details:
-        logger.warning(f"Error fetching project details: {project_details['error']}")
-        return project_details
-    
-    return project_details
+    return client.get_project_details_from_repo(project_name)
 
 
-def get_fuzz_targets(project_name: str) -> Dict[str, Any]:
+def get_fuzz_targets(project_name: str) -> List[FuzzTarget]:
     """
     Get information about available fuzz targets for a specific project.
     
@@ -69,48 +58,19 @@ def get_fuzz_targets(project_name: str) -> Dict[str, Any]:
         project_name (str): Name of the OSS-Fuzz project
         
     Returns:
-        Dict: Information about fuzz targets
+        List[FuzzTarget]: List of available fuzz targets
         
     Raises:
         ValueError: If project name is invalid
         
     Example:
-        >>> get_fuzz_targets("curl")
-        {
-            'project': 'curl',
-            'fuzz_targets': ['curl_fuzzer', 'url_parser_fuzzer', ...],
-            'count': 5
-        }
+        >>> targets = get_fuzz_targets("curl")
+        >>> print(f"Found {len(targets)} fuzz targets")
+        Found 5 fuzz targets
     """
     project_name = validate_project_name(project_name)
-    
-    # Get project details to check if it exists
-    project_details = client.get_project_details(project_name)
-    
-    if "error" in project_details:
-        logger.warning(f"Error fetching project details: {project_details['error']}")
-        return project_details
-    
-    # Get OSS-Fuzz directory
-    oss_fuzz_dir = client.get_oss_fuzz_dir()
-    if not oss_fuzz_dir:
-        return {
-            "project": project_name,
-            "error": "OSS-Fuzz repository not found"
-        }
-    
-    # Get project directory
-    project_dir = os.path.join(oss_fuzz_dir, "projects", project_name)
-    
-    # Get fuzz targets from build.sh (placeholder implementation)
-    from ..custom_fuzzing.api import _get_fuzz_targets
-    fuzz_targets = _get_fuzz_targets(project_name, project_dir)
-    
-    return {
-        "project": project_name,
-        "fuzz_targets": fuzz_targets,
-        "count": len(fuzz_targets)
-    }
+    project = get_project_details(project_name)
+    return client.get_fuzz_targets(project)
 
 
 def check_project_exists(project_name: str) -> bool:
@@ -145,7 +105,7 @@ def check_project_exists(project_name: str) -> bool:
 def get_projects(language: Optional[str] = None,
                 build_system: Optional[str] = None,
                 sanitizer: Optional[str] = None,
-                fuzzer_engine: Optional[str] = None) -> List[Dict[str, Any]]:
+                fuzzer_engine: Optional[str] = None) -> List[OSSFuzzProject]:
     """
     Get list of OSS-Fuzz projects with optional filtering.
     
@@ -156,11 +116,12 @@ def get_projects(language: Optional[str] = None,
         fuzzer_engine (str, optional): Filter by fuzzer engine (e.g., libfuzzer, afl)
         
     Returns:
-        List[Dict]: List of projects with basic information
+        List[OSSFuzzProject]: List of projects
         
     Example:
-        >>> get_projects(language="c++")
-        [{'name': 'curl', 'language': 'c++', ...}, ...]
+        >>> projects = get_projects(language="c++")
+        >>> print(f"Found {len(projects)} C++ projects")
+        Found 42 C++ projects
     """
     try:
         # Get all projects from local OSS-Fuzz repo
@@ -168,13 +129,13 @@ def get_projects(language: Optional[str] = None,
         
         # Apply filters
         if language:
-            projects = [p for p in projects if p.get("language", "").lower() == language.lower()]
+            projects = [p for p in projects if p.language and p.language.lower() == language.lower()]
         
         if sanitizer:
-            projects = [p for p in projects if sanitizer in p.get("sanitizers", [])]
+            projects = [p for p in projects if sanitizer in p.sanitizers]
             
         if fuzzer_engine:
-            projects = [p for p in projects if fuzzer_engine in p.get("fuzzing_engines", [])]
+            projects = [p for p in projects if fuzzer_engine in p.fuzzing_engines]
         
         # Note: build_system is not directly available in project.yaml
         # We could parse Dockerfile or build.sh to determine this

@@ -131,4 +131,28 @@ def format_datetime(dt: Union[datetime.datetime, str]) -> str:
         except ValueError:
             return dt  # Return as is if we can't parse
             
-    return dt.strftime("%Y-%m-%d %H:%M:%S") 
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def format_date(date: Union[datetime.datetime, str]) -> str:
+    """
+    Format a date to ISO format string.
+    
+    Args:
+        date (datetime or str): Date to format
+        
+    Returns:
+        str: Formatted date string
+        
+    Raises:
+        ValueError: If date is invalid
+    """
+    if isinstance(date, str):
+        try:
+            date = datetime.datetime.fromisoformat(date)
+        except ValueError:
+            raise ValueError("Invalid date format. Use ISO format (YYYY-MM-DD)")
+    elif not isinstance(date, datetime.datetime):
+        raise ValueError("Date must be a datetime object or ISO format string")
+        
+    return date.isoformat() 

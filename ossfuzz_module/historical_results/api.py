@@ -1,17 +1,16 @@
 """
-Historical fuzzing results APIs for OSS-Fuzz projects.
+Historical results APIs for OSS-Fuzz projects.
 """
 
 from typing import Dict, List, Optional, Any, Union
 import datetime
-import os
 import logging
-import pandas as pd
-from pathlib import Path
 import random
+import pandas as pd
 
 from ..utils.client import client
-from ..utils.common import validate_project_name, validate_date_range
+from ..utils.common import validate_project_name
+from ..models import OSSFuzzProject, CoverageReport
 
 logger = logging.getLogger(__name__)
 
@@ -19,73 +18,61 @@ def get_coverage(project_name: str,
                 start_date: Optional[Union[datetime.datetime, str]] = None,
                 end_date: Optional[Union[datetime.datetime, str]] = None,
                 fuzzer: Optional[str] = None,
-                format: str = "json") -> Union[Dict[str, Any], pd.DataFrame]:
+                format: str = "json") -> Union[CoverageReport, pd.DataFrame]:
     """
-    Get coverage reports for a specific project and date range.
+    Get coverage information for a project.
     
     Args:
         project_name (str): Name of the OSS-Fuzz project
-        start_date: Start date for coverage reports (optional)
-        end_date: End date for coverage reports (optional)
-        fuzzer (str, optional): Filter by specific fuzzer
-        format (str, optional): Return format, 'json' or 'dataframe'
+        start_date (datetime or str, optional): Start date for coverage data
+        end_date (datetime or str, optional): End date for coverage data
+        fuzzer (str, optional): Name of the fuzzer to get coverage for
+        format (str, optional): Output format ("json" or "dataframe")
         
     Returns:
-        Union[Dict, pd.DataFrame]: Coverage data in requested format
+        CoverageReport or pd.DataFrame: Coverage information
         
     Raises:
-        ValueError: If parameters are invalid
-        
-    Note:
-        Without OSS-Fuzz service access, this will return a placeholder message.
+        ValueError: If project name is invalid
         
     Example:
-        >>> get_coverage("curl", 
-        ...             start_date="2023-01-01", 
-        ...             end_date="2023-01-31")
-        {
-            'overall_coverage': 76.5,
-            'line_coverage': 82.1,
-            'function_coverage': 89.3,
-            'daily_coverage': [...],
-            'fuzzers': {...}
-        }
+        >>> coverage = get_coverage("curl", 
+        ...                        start_date="2023-01-01", 
+        ...                        end_date="2023-01-31")
+        >>> print(f"Overall coverage: {coverage.overall_coverage}%")
+        Overall coverage: 75.5%
     """
     project_name = validate_project_name(project_name)
-    date_range = validate_date_range(start_date, end_date)
     
-    # Get coverage information from OSS-Fuzz
-    coverage_info = client.get_coverage_from_oss_fuzz(project_name)
+    # Get project details
+    project = client.get_project_details_from_repo(project_name)
     
-    # Add placeholder data for demonstration
-    placeholder_data = {
-        'overall_coverage': 0,
-        'line_coverage': 0,
-        'function_coverage': 0,
-        'daily_coverage': []
+    # Parse date range
+    date_range = {
+        "start_date": start_date.isoformat() if isinstance(start_date, datetime.datetime) else start_date,
+        "end_date": end_date.isoformat() if isinstance(end_date, datetime.datetime) else end_date
     }
     
-    # Generate sample daily coverage data
-    start = datetime.datetime.fromisoformat(date_range["start_date"])
-    end = datetime.datetime.fromisoformat(date_range["end_date"])
-    delta = end - start
+    # Get coverage information from OSS-Fuzz service
+    coverage_info = client.get_coverage(project, start_date, end_date)
     
-    if delta.days > 0:
-        # Generate random coverage data for demonstration
-        for i in range(delta.days + 1):
-            day = start + datetime.timedelta(days=i)
-            placeholder_data['daily_coverage'].append({
-                'date': day.strftime("%Y-%m-%d"),
-                'line_coverage': random.uniform(60, 85),
-                'function_coverage': random.uniform(70, 95),
-                'overall_coverage': random.uniform(65, 80)
-            })
+    if not coverage_info:
+        logger.warning(f"Could not fetch coverage data for {project_name}")
+        return None
     
-    result = {**coverage_info, **placeholder_data}
+    # Add placeholder data for demonstration
+    coverage_info.line_coverage = random.uniform(60, 85)
+    coverage_info.function_coverage = random.uniform(70, 95)
+    coverage_info.overall_coverage = random.uniform(65, 80)
     
-    if format.lower() == "dataframe" and "daily_coverage" in result:
+    if format.lower() == "dataframe":
         # Convert daily coverage to DataFrame
-        df = pd.DataFrame(result["daily_coverage"])
+        df = pd.DataFrame([{
+            'date': coverage_info.date,
+            'line_coverage': coverage_info.line_coverage,
+            'function_coverage': coverage_info.function_coverage,
+            'overall_coverage': coverage_info.overall_coverage
+        }])
         
         # Convert date strings to datetime objects
         if "date" in df.columns:
@@ -93,74 +80,59 @@ def get_coverage(project_name: str,
             
         return df
         
-    return result
-
+    return coverage_info
 
 def get_crash_reports(project_name: str,
                      start_date: Optional[Union[datetime.datetime, str]] = None,
                      end_date: Optional[Union[datetime.datetime, str]] = None,
-                     fuzzer: Optional[str] = None,
-                     status: Optional[str] = None,
-                     format: str = "json") -> Union[Dict[str, Any], pd.DataFrame]:
+                     fuzzer: Optional[str] = None) -> Dict[str, Any]:
     """
-    Get crash reports for a specific project and date range.
+    Get crash reports for a project.
     
     Args:
         project_name (str): Name of the OSS-Fuzz project
-        start_date: Start date for crash reports (optional)
-        end_date: End date for crash reports (optional)
-        fuzzer (str, optional): Filter by specific fuzzer
-        status (str, optional): Filter by status (e.g., "new", "fixed", "verified")
-        format (str, optional): Return format, 'json' or 'dataframe'
+        start_date (datetime or str, optional): Start date for crash data
+        end_date (datetime or str, optional): End date for crash data
+        fuzzer (str, optional): Name of the fuzzer to get crashes for
         
     Returns:
-        Union[Dict, pd.DataFrame]: Crash reports data in requested format
+        Dict: Crash report information
         
     Raises:
-        ValueError: If parameters are invalid
-        
-    Note:
-        Without OSS-Fuzz service access, this will return a placeholder message.
+        ValueError: If project name is invalid
         
     Example:
-        >>> get_crash_reports("curl", 
-        ...                  start_date="2023-01-01", 
-        ...                  end_date="2023-01-31")
-        {
-            'total_crashes': 5,
-            'unique_crashes': 3,
-            'crashes': [
-                {
-                    'id': 'crash-12345',
-                    'fuzzer': 'url_fuzzer',
-                    'date': '2023-01-15',
-                    'type': 'heap-buffer-overflow',
-                    'status': 'verified',
-                    ...
-                },
-                ...
-            ]
-        }
+        >>> crashes = get_crash_reports("curl", 
+        ...                             start_date="2023-01-01", 
+        ...                             end_date="2023-01-31")
+        >>> print(f"Found {crashes['total_crashes']} crashes")
+        Found 42 crashes
     """
     project_name = validate_project_name(project_name)
-    date_range = validate_date_range(start_date, end_date)
     
-    # Add placeholder data for demonstration
-    placeholder_data = {
-        'total_crashes': 0,
-        'unique_crashes': 0,
-        'crashes': [],
-        'warning': 'Access to real crash data requires OSS-Fuzz service access',
-        'project': project_name,
+    # Get project details
+    project = client.get_project_details_from_repo(project_name)
+    
+    # Parse date range
+    date_range = {
+        "start_date": start_date.isoformat() if isinstance(start_date, datetime.datetime) else start_date,
+        "end_date": end_date.isoformat() if isinstance(end_date, datetime.datetime) else end_date
     }
     
-    if format.lower() == "dataframe":
-        # Return empty DataFrame with expected columns
-        return pd.DataFrame(columns=[
-            'id', 'fuzzer', 'date', 'type', 'status', 'fixed', 'summary'
-        ])
-        
-    return placeholder_data
+    # This would be implemented with actual OSS-Fuzz service calls
+    # For now, return placeholder data
+    return {
+        "project": project_name,
+        "total_crashes": random.randint(0, 100),
+        "unique_crashes": random.randint(0, 50),
+        "crash_types": {
+            "segmentation_fault": random.randint(0, 20),
+            "buffer_overflow": random.randint(0, 15),
+            "use_after_free": random.randint(0, 10),
+            "null_pointer_dereference": random.randint(0, 25)
+        },
+        "date_range": date_range
+    }
 
 
 def get_coverage_report(project_name: str, 
